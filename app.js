@@ -400,3 +400,97 @@ app.use((req, res) => {
 app.listen(PORT, '0.0.0.0', () => {
     console.log(`Server running on http://0.0.0.0:${PORT}`);
 });
+// Add this debug endpoint after your existing routes in app.js
+// This will help us diagnose the issue
+
+app.get('/api/debug', async (req, res) => {
+    try {
+        // Test database connection
+        const dbState = mongoose.connection.readyState;
+        const states = {
+            0: 'disconnected',
+            1: 'connected', 
+            2: 'connecting',
+            3: 'disconnecting'
+        };
+        
+        let apartmentCount = 0;
+        let testApartment = null;
+        
+        if (dbState === 1) {
+            apartmentCount = await Apartment.countDocuments();
+            testApartment = await Apartment.findOne();
+        }
+        
+        res.json({
+            success: true,
+            database: {
+                state: states[dbState],
+                stateCode: dbState,
+                apartmentCount: apartmentCount,
+                hasTestData: !!testApartment
+            },
+            environment: {
+                nodeEnv: process.env.NODE_ENV,
+                hasMongoUri: !!process.env.MONGO_URI,
+                mongoUriStart: process.env.MONGO_URI ? process.env.MONGO_URI.substring(0, 20) + '...' : 'Not set'
+            }
+        });
+    } catch (error) {
+        res.status(500).json({
+            success: false,
+            error: error.message,
+            stack: error.stack
+        });
+    }
+});
+
+// Also add error handling to the apartments endpoint
+app.get('/api/apartments', async (req, res) => {
+    try {
+        // Check if database is connected
+        if (mongoose.connection.readyState !== 1) {
+            return res.status(500).json({ 
+                error: 'Database not connected',
+                dbState: mongoose.connection.readyState 
+            });
+        }
+
+        const { min_price, max_price, rooms, beds, location } = req.query;
+        
+        // Build query
+        let query = { available: true };
+        
+        if (min_price !== undefined || max_price !== undefined) {
+            query.monthly_price = {};
+            if (min_price !== undefined) {
+                query.monthly_price.$gte = parseFloat(min_price);
+            }
+            if (max_price !== undefined) {
+                query.monthly_price.$lte = parseFloat(max_price);
+            }
+        }
+        
+        if (rooms !== undefined) {
+            query.room_count = parseInt(rooms);
+        }
+        
+        if (beds !== undefined) {
+            query.bed_count = parseInt(beds);
+        }
+        
+        if (location) {
+            query.address = { $regex: location, $options: 'i' };
+        }
+        
+        const apartments = await Apartment.find(query);
+        res.json(apartments);
+        
+    } catch (error) {
+        console.error('Error fetching apartments:', error);
+        res.status(500).json({ 
+            error: error.message,
+            details: 'Check server logs for more information'
+        });
+    }
+});
